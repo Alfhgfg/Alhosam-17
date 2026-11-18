@@ -140,7 +140,24 @@ const MainShell: React.FC = () => {
     [isAdmin, hasPermission]
   );
 
+  console.info('[AuthDiag 10] LoginView render decision check:', {
+    loading,
+    hasUser: Boolean(firebaseUser),
+    userEmail: firebaseUser?.email,
+    isActiveStaff,
+    isAdmin,
+    isDeviceBlocked,
+    profileStatus: profile?.status,
+    profileRole: profile?.role,
+  });
+
   if (loading || !firebaseUser || !isActiveStaff || isDeviceBlocked) {
+    console.warn('[AuthDiag 10b] Rendering LoginView because:', {
+      loading,
+      noUser: !firebaseUser,
+      notActiveStaff: !isActiveStaff,
+      deviceBlocked: isDeviceBlocked,
+    });
     return <LoginView />;
   }
 

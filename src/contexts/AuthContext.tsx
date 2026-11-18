@@ -162,6 +162,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const syncUserSession = useCallback(async (user: User | null) => {
     const seq = ++authSeqRef.current;
+    console.info('[AuthDiag 5] auth.currentUser check:', Boolean(auth.currentUser), 'uid:', auth.currentUser?.uid, 'email:', auth.currentUser?.email);
 
     if (unsubProfileRef.current) {
       unsubProfileRef.current();
@@ -186,6 +187,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     const isBootstrap =
       Boolean(user.email) &&
       user.email!.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL.toLowerCase();
+    console.info('[AuthDiag 8] BOOTSTRAP_ADMIN_EMAIL match check - isBootstrap:', isBootstrap, 'userEmail:', user.email, 'bootstrapEmail:', BOOTSTRAP_ADMIN_EMAIL);
 
     if (!user.emailVerified && !isBootstrap) {
       console.warn('[AlHussamAuth] Signed-in user email is not verified:', user.email);
@@ -280,6 +282,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         FIRESTORE_BOOTSTRAP_TIMEOUT_MS,
         'getDoc:users'
       );
+      console.info('[AuthDiag 7] Firestore user doc exists:', userSnap.exists(), 'uid:', user.uid);
       if (authSeqRef.current !== seq) return;
 
       if (!userSnap.exists()) {
@@ -466,7 +469,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, (user) => {
       console.info(
-        '[AlHussamAuth] onAuthStateChanged:',
+        '[AuthDiag 6] onAuthStateChanged triggered. user:',
         user ? `${user.email} (uid=${user.uid}, verified=${user.emailVerified})` : 'signed-out'
       );
       void syncUserSession(user);
@@ -510,6 +513,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         profile.status === 'active' &&
         (profile.role === 'admin' || profile.role === 'employee')
     );
+
+  useEffect(() => {
+    console.info('[AuthDiag 9] Authorization state evaluation - isActiveStaff:', isActiveStaff, 'isAdmin:', isAdmin, 'profileStatus:', profile?.status, 'profileRole:', profile?.role, 'userEmail:', firebaseUser?.email);
+  }, [isActiveStaff, isAdmin, profile?.status, profile?.role, firebaseUser?.email]);
 
   // Register/heartbeat device in the background once the user is authorized
   useEffect(() => {
@@ -584,6 +591,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     if (signingIn) return;
     setAuthError(null);
     setSigningIn(true);
+    console.info('[AuthDiag 1] Start Google SocialLogin. Native platform:', Capacitor.isNativePlatform());
 
     if (Capacitor.isNativePlatform()) {
       try {
@@ -597,13 +605,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           },
         });
         console.info(
-          '[AlHussamAuth] SocialLogin returned:',
-          res?.result?.responseType,
-          'hasIdToken=',
+          '[AuthDiag 2] Google account picker result - responseType:',
+          res?.result?.responseType
+        );
+        console.info(
+          '[AuthDiag 3] idToken presence check:',
           Boolean(res?.result && 'idToken' in res.result && res.result.idToken)
         );
         if (res.result.responseType !== 'online' || !res.result.idToken) {
-          setAuthError('لم يتم استلام رمز التحقق (ID Token) من حساب Google. يرجى المحاولة مرة أخرى.');
+          setAuthError('خطأ تسجيل الدخول [CODE: MISSING_ID_TOKEN]: لم يتم استلام رمز التحقق (ID Token) من حساب Google.');
           return;
         }
         const credential = GoogleAuthProvider.credential(
@@ -612,17 +622,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         );
         const userCred = await signInWithCredential(auth, credential);
         console.info(
-          '[AlHussamAuth] Firebase signInWithCredential succeeded:',
+          '[AuthDiag 4] signInWithCredential succeeded - email:',
           userCred.user.email,
           'uid=',
           userCred.user.uid
         );
         setFirebaseUser(userCred.user);
       } catch (err) {
-        const code = (err as { code?: string })?.code || '';
+        const code = (err as { code?: string })?.code || 'UNKNOWN';
         const msg = err instanceof Error ? err.message : String(err);
         const lower = `${code} ${msg}`.toLowerCase();
-        console.error('[AlHussamAuth] Native Google sign-in error:', code, msg, err);
+        console.error('[AuthDiag Error] Native Google sign-in error code:', code, 'message:', msg, err);
 
         if (
           code === 'USER_CANCELLED' ||
@@ -639,31 +649,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           lower.includes('google cloud oauth is not configured')
         ) {
           setAuthError(
-            'فشل التحقق من إعدادات OAuth لتطبيق Android (DEVELOPER_ERROR). تأكد من تسجيل الحزمة com.alhussam.grocery وبصمتي SHA-1 و SHA-256 لمفتاح التوقيع في Firebase Console ووجود ملف google-services.json المحدّث.'
+            `خطأ تسجيل الدخول [CODE: DEVELOPER_ERROR / 28444]: فشل التحقق من إعدادات OAuth لتطبيق Android. تأكد من إعدادات SHA-1 / SHA-256 و google-services.json (${msg})`
           );
           return;
         }
         if (lower.includes('no credentials') || lower.includes('nocredential')) {
           setAuthError(
-            'لا يوجد حساب Google مسجل أو متاح على هذا الهاتف. يرجى إضافة حساب Google في إعدادات الجهاز وتحديث خدمات Google Play.'
+            `خطأ تسجيل الدخول [CODE: NO_CREDENTIALS]: لا يوجد حساب Google مسجل على الجهاز (${msg})`
           );
           return;
         }
         if (code === 'auth/invalid-credential' || lower.includes('invalid-credential')) {
           setAuthError(
-            'تم رفض رمز Google من Firebase Auth (invalid-credential). تأكد من تطابق Web Client ID في الإعدادات ومشروع Firebase.'
+            `خطأ تسجيل الدخول [CODE: auth/invalid-credential]: رفض الرمز من Firebase Auth (${msg})`
           );
           return;
         }
         if (code === 'auth/network-request-failed' || lower.includes('network')) {
-          setAuthError('تعذر الاتصال بالإنترنت. يرجى التحقق من الشبكة والمحاولة مرة أخرى.');
+          setAuthError(`خطأ تسجيل الدخول [CODE: NETWORK_FAILED]: تعذر الاتصال بالشبكة (${msg})`);
           return;
         }
         if (lower.includes('missing_web_client_id')) {
-          setAuthError('معرّف Web Client ID غير مضبوط في إعدادات Firebase.');
+          setAuthError(`خطأ تسجيل الدخول [CODE: MISSING_WEB_CLIENT_ID]: ${msg}`);
           return;
         }
-        setAuthError(`تعذر إتمام تسجيل الدخول عبر Google على الهاتف: ${msg}`);
+        setAuthError(`خطأ تسجيل الدخول [CODE: ${code}]: ${msg}`);
       } finally {
         setSigningIn(false);
       }
