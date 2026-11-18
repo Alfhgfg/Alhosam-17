@@ -19,11 +19,13 @@ export const LoginView: React.FC = () => {
     firebaseUser,
     profile,
     loading,
+    signingIn,
     authError,
     isDeviceBlocked,
     deviceIdentity,
     deviceRecord,
     signInWithGoogle,
+    retryProfileSync,
     logout,
     updateCurrentDeviceName,
   } = useAuth();
@@ -192,6 +194,50 @@ export const LoginView: React.FC = () => {
     );
   }
 
+  if (firebaseUser && !profile) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+        <div className="bg-white border border-slate-200 rounded-xl p-8 max-w-md w-full space-y-5 text-center">
+          <div className="w-12 h-12 rounded-xl bg-amber-50 border border-amber-200 text-amber-700 flex items-center justify-center mx-auto">
+            <Clock className="w-6 h-6" />
+          </div>
+          <div className="space-y-2">
+            <h1 className="text-xl font-bold text-slate-900">استكمال التحقق من الحساب</h1>
+            <p className="text-sm text-slate-600 leading-relaxed">
+              تم تسجيل دخولك عبر{' '}
+              <span className="font-mono-num font-semibold text-slate-900" dir="ltr">
+                {firebaseUser.email}
+              </span>
+              .
+            </p>
+            {authError && (
+              <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs text-right leading-relaxed">
+                {authError}
+              </div>
+            )}
+          </div>
+          <div className="space-y-2.5">
+            <button
+              type="button"
+              onClick={retryProfileSync}
+              className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-700 text-white text-sm font-semibold rounded-lg hover:bg-emerald-800 transition-colors cursor-pointer"
+            >
+              <span>إعادة التحقق والمزامنة</span>
+            </button>
+            <button
+              type="button"
+              onClick={logout}
+              className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-900 text-white text-sm font-medium rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>تسجيل الخروج</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-[100dvh] bg-slate-50 flex flex-col justify-center items-center p-4 sm:p-6">
       <div className="w-full max-w-lg bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 md:p-10 space-y-6 sm:space-y-7">
@@ -266,16 +312,27 @@ export const LoginView: React.FC = () => {
           )}
 
           <button
+            type="button"
             onClick={signInWithGoogle}
-            className="w-full flex items-center justify-center gap-3 px-5 py-3 bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-sm rounded-xl transition-colors cursor-pointer"
+            disabled={signingIn}
+            className="w-full flex items-center justify-center gap-3 px-5 py-3 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold text-sm rounded-xl transition-colors cursor-pointer"
           >
-            <svg className="w-5 h-5" viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                fill="currentColor"
-                d="M21.35 11.1h-9.17v2.73h6.51c-.33 3.81-3.5 5.44-6.5 5.44C8.36 19.27 5 16.25 5 12c0-4.1 3.2-7.27 7.2-7.27c3.09 0 4.9 1.97 4.9 1.97L19 4.72S16.56 2 12.1 2C6.42 2 2.03 6.8 2.03 12c0 5.05 4.13 10 10.22 10c5.35 0 9.25-3.67 9.25-9.09c0-1.15-.15-1.81-.15-1.81Z"
-              />
-            </svg>
-            <span>الدخول باستخدام حساب Google</span>
+            {signingIn ? (
+              <>
+                <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                <span>جاري تسجيل الدخول عبر Google...</span>
+              </>
+            ) : (
+              <>
+                <svg className="w-5 h-5" viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    fill="currentColor"
+                    d="M21.35 11.1h-9.17v2.73h6.51c-.33 3.81-3.5 5.44-6.5 5.44C8.36 19.27 5 16.25 5 12c0-4.1 3.2-7.27 7.2-7.27c3.09 0 4.9 1.97 4.9 1.97L19 4.72S16.56 2 12.1 2C6.42 2 2.03 6.8 2.03 12c0 5.05 4.13 10 10.22 10c5.35 0 9.25-3.67 9.25-9.09c0-1.15-.15-1.81-.15-1.81Z"
+                  />
+                </svg>
+                <span>الدخول باستخدام حساب Google</span>
+              </>
+            )}
           </button>
         </div>
 

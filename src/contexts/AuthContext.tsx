@@ -15,6 +15,7 @@ import {
   collection,
   doc,
   getDoc,
+  getDocFromCache,
   getDocs,
   onSnapshot,
   query,
@@ -29,8 +30,6 @@ import {
   db,
   GOOGLE_WEB_CLIENT_ID,
   googleProvider,
-  handleFirestoreError,
-  OperationType,
   testConnection,
 } from '../firebase';
 import {
@@ -56,6 +55,7 @@ interface AuthContextValue {
   firebaseUser: User | null;
   profile: UserProfile | null;
   loading: boolean;
+  signingIn: boolean;
   authError: string | null;
   isAdmin: boolean;
   isActiveStaff: boolean;
@@ -64,6 +64,7 @@ interface AuthContextValue {
   isDeviceBlocked: boolean;
   actorInfo: ActorInfo | null;
   signInWithGoogle: () => Promise<void>;
+  retryProfileSync: () => Promise<void>;
   logout: () => Promise<void>;
   hasPermission: (perm: keyof UserProfile['permissions']) => boolean;
   updateCurrentDeviceName: (name: string) => Promise<void>;
@@ -72,18 +73,56 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+const FIRESTORE_BOOTSTRAP_TIMEOUT_MS = 8000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`TIMEOUT:${label}`));
+    }, ms);
+    promise.then(
+      (val) => {
+        clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
+function buildFallbackBootstrapAdminProfile(user: User): UserProfile {
+  return {
+    id: user.uid,
+    uid: user.uid,
+    email: user.email || BOOTSTRAP_ADMIN_EMAIL,
+    displayName: truncateText(user.displayName || user.email || 'المسؤول الرئيسي', 120),
+    role: 'admin',
+    status: 'active',
+    permissions: ADMIN_PERMISSIONS,
+    createdAt: null,
+    updatedAt: null,
+  };
+}
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [signingIn, setSigningIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [deviceIdentity, setDeviceIdentity] = useState<DetectedDeviceMetadata>(() =>
     getLocalDeviceIdentity()
   );
   const [deviceRecord, setDeviceRecord] = useState<DeviceRecord | null>(null);
   const registeredSessionKeyRef = useRef<string | null>(null);
+  const authSeqRef = useRef(0);
+  const unsubProfileRef = useRef<(() => void) | null>(null);
+  const unsubDeviceRef = useRef<(() => void) | null>(null);
 
   const nativeSocialInitRef = useRef<Promise<void> | null>(null);
 
@@ -121,151 +160,257 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   }, []);
 
-  useEffect(() => {
-    let unsubProfile: (() => void) | null = null;
-    let unsubDevice: (() => void) | null = null;
+  const syncUserSession = useCallback(async (user: User | null) => {
+    const seq = ++authSeqRef.current;
 
-    const unsubAuth = onAuthStateChanged(auth, async (user) => {
-      if (unsubProfile) {
-        unsubProfile();
-        unsubProfile = null;
-      }
-      if (unsubDevice) {
-        unsubDevice();
-        unsubDevice = null;
-      }
-      registeredSessionKeyRef.current = null;
+    if (unsubProfileRef.current) {
+      unsubProfileRef.current();
+      unsubProfileRef.current = null;
+    }
+    if (unsubDeviceRef.current) {
+      unsubDeviceRef.current();
+      unsubDeviceRef.current = null;
+    }
+    registeredSessionKeyRef.current = null;
 
-      setFirebaseUser(user);
-      setAuthError(null);
+    setFirebaseUser(user);
+    setAuthError(null);
 
-      if (!user) {
-        setProfile(null);
-        setDeviceRecord(null);
-        setLoading(false);
-        return;
-      }
+    if (!user) {
+      setProfile(null);
+      setDeviceRecord(null);
+      setLoading(false);
+      return;
+    }
 
-      if (!user.emailVerified) {
-        setAuthError('يرجى استخدام حساب بريد إلكتروني موثق (Google Verified).');
-        setProfile(null);
-        setDeviceRecord(null);
-        setLoading(false);
-        return;
-      }
+    const isBootstrap =
+      Boolean(user.email) &&
+      user.email!.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL.toLowerCase();
 
-      setLoading(true);
-      try {
-        const userRef = doc(db, 'users', user.uid);
-        const userSnap = await getDoc(userRef);
+    if (!user.emailVerified && !isBootstrap) {
+      console.warn('[AlHussamAuth] Signed-in user email is not verified:', user.email);
+      setAuthError('يرجى استخدام حساب بريد إلكتروني موثق (Google Verified).');
+      setProfile(null);
+      setDeviceRecord(null);
+      setLoading(false);
+      return;
+    }
 
-        const isBootstrap =
-          user.email?.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL.toLowerCase();
+    const userRef = doc(db, 'users', user.uid);
+    const currentDev = getLocalDeviceIdentity();
+    setDeviceIdentity(currentDev);
 
-        let resolvedRole: UserProfile['role'] = 'pending';
-        let resolvedStatus: UserProfile['status'] = 'pending';
-        let resolvedName = user.displayName || user.email || 'مستخدم جديد';
-
-        if (!userSnap.exists()) {
-          // Check if there is an active staff invite for this email (case-insensitive)
-          let matchedInvite: (StaffInvite & { id: string }) | null = null;
-          if (!isBootstrap && user.email) {
-            try {
-              const lowerEmail = user.email.trim().toLowerCase();
-              let inviteSnaps = await getDocs(
-                query(collection(db, 'staff_invites'), where('email', '==', lowerEmail))
-              );
-              if (inviteSnaps.empty && lowerEmail !== user.email) {
-                inviteSnaps = await getDocs(
-                  query(collection(db, 'staff_invites'), where('email', '==', user.email))
-                );
-              }
-              const activeInv = inviteSnaps.docs.find(
-                (d) => d.data().status === 'active'
-              );
-              if (activeInv) {
-                matchedInvite = {
-                  id: activeInv.id,
-                  ...(activeInv.data() as Omit<StaffInvite, 'id'>),
-                };
-              }
-            } catch {
-              // No invite found or permission check
-            }
+    // Attach real-time device status listener immediately (never blocks navigation)
+    unsubDeviceRef.current = onSnapshot(
+      doc(db, 'devices', currentDev.deviceId),
+      (devSnap) => {
+        if (authSeqRef.current !== seq) return;
+        if (devSnap.exists()) {
+          const d = {
+            id: devSnap.id,
+            ...(devSnap.data() as Omit<DeviceRecord, 'id'>),
+          };
+          setDeviceRecord(d);
+          if (d.deviceName) {
+            const synced = saveDeviceName(d.deviceName);
+            setDeviceIdentity((prev) =>
+              prev.deviceName === synced ? prev : { ...prev, deviceName: synced }
+            );
           }
+        } else {
+          setDeviceRecord(null);
+        }
+      },
+      (err) => {
+        console.warn('[AlHussamAuth] Device listener notice:', err?.message || err);
+      }
+    );
 
-          const displayName = truncateText(
-            matchedInvite?.name || user.displayName || user.email || 'مستخدم جديد',
-            120
-          );
-          resolvedName = displayName;
+    // If this is the verified bootstrap admin, grant immediate entry to the Home shell
+    // and hydrate/initialize Firestore documents in the background without blocking UI.
+    if (isBootstrap) {
+      setProfile((prev) => (prev && prev.uid === user.uid ? prev : buildFallbackBootstrapAdminProfile(user)));
+      setLoading(false);
+    } else {
+      setLoading(true);
+      // Try fast local cache first so returning users never wait on network
+      try {
+        const cachedSnap = await getDocFromCache(userRef);
+        if (authSeqRef.current !== seq) return;
+        if (cachedSnap.exists()) {
+          setProfile({
+            id: cachedSnap.id,
+            ...(cachedSnap.data() as Omit<UserProfile, 'id'>),
+          });
+          setLoading(false);
+        }
+      } catch {
+        // Cache miss on fresh install — proceed to live profile sync
+      }
+    }
 
-          if (isBootstrap) {
-            resolvedRole = 'admin';
-            resolvedStatus = 'active';
-            await setDoc(userRef, {
-              uid: user.uid,
-              email: user.email || BOOTSTRAP_ADMIN_EMAIL,
-              displayName,
-              role: 'admin',
-              status: 'active',
-              permissions: ADMIN_PERMISSIONS,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            });
+    // Attach real-time user profile listener (updates state as soon as profile exists or changes)
+    unsubProfileRef.current = onSnapshot(
+      userRef,
+      (snap) => {
+        if (authSeqRef.current !== seq) return;
+        if (snap.exists()) {
+          const data = snap.data() as Omit<UserProfile, 'id'>;
+          setProfile({ id: snap.id, ...data });
+          setLoading(false);
+        } else if (isBootstrap) {
+          setProfile((prev) => prev || buildFallbackBootstrapAdminProfile(user));
+          setLoading(false);
+        }
+      },
+      (err) => {
+        if (authSeqRef.current !== seq) return;
+        console.error('[AlHussamAuth] User profile listener error:', err);
+        if (!isBootstrap) {
+          setAuthError('تعذر مزامنة ملف الصلاحيات من قاعدة البيانات. يرجى المحاولة مرة أخرى.');
+        }
+        setLoading(false);
+      }
+    );
+
+    // Run Firestore user creation / bootstrap setup safely (with timeout for non-admin first login)
+    try {
+      const userSnap = await withTimeout(
+        getDoc(userRef),
+        FIRESTORE_BOOTSTRAP_TIMEOUT_MS,
+        'getDoc:users'
+      );
+      if (authSeqRef.current !== seq) return;
+
+      if (!userSnap.exists()) {
+        let matchedInvite: (StaffInvite & { id: string }) | null = null;
+        if (!isBootstrap && user.email) {
+          try {
+            const lowerEmail = user.email.trim().toLowerCase();
+            let inviteSnaps = await withTimeout(
+              getDocs(query(collection(db, 'staff_invites'), where('email', '==', lowerEmail))),
+              FIRESTORE_BOOTSTRAP_TIMEOUT_MS,
+              'getDocs:staff_invites'
+            );
+            if (inviteSnaps.empty && lowerEmail !== user.email) {
+              inviteSnaps = await withTimeout(
+                getDocs(query(collection(db, 'staff_invites'), where('email', '==', user.email))),
+                FIRESTORE_BOOTSTRAP_TIMEOUT_MS,
+                'getDocs:staff_invites_raw'
+              );
+            }
+            const activeInv = inviteSnaps.docs.find(
+              (d) => d.data().status === 'active'
+            );
+            if (activeInv) {
+              matchedInvite = {
+                id: activeInv.id,
+                ...(activeInv.data() as Omit<StaffInvite, 'id'>),
+              };
+            }
+          } catch (inviteErr) {
+            console.warn('[AlHussamAuth] Staff invite lookup notice:', inviteErr);
+          }
+        }
+
+        if (authSeqRef.current !== seq) return;
+
+        const displayName = truncateText(
+          matchedInvite?.name || user.displayName || user.email || 'مستخدم جديد',
+          120
+        );
+
+        if (isBootstrap) {
+          const adminDocPayload = {
+            uid: user.uid,
+            email: user.email || BOOTSTRAP_ADMIN_EMAIL,
+            displayName,
+            role: 'admin' as const,
+            status: 'active' as const,
+            permissions: ADMIN_PERMISSIONS,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          };
+          await setDoc(userRef, adminDocPayload);
+          await setDoc(doc(db, 'admins', user.uid), {
+            uid: user.uid,
+            email: user.email || BOOTSTRAP_ADMIN_EMAIL,
+            createdAt: serverTimestamp(),
+          });
+        } else if (matchedInvite) {
+          const staffProfile: UserProfile = {
+            id: user.uid,
+            uid: user.uid,
+            email: user.email || '',
+            displayName,
+            role: matchedInvite.role,
+            status: 'active',
+            permissions: matchedInvite.permissions,
+            inviteId: matchedInvite.id,
+            createdAt: null,
+            updatedAt: null,
+          };
+          await setDoc(userRef, {
+            uid: user.uid,
+            email: user.email || '',
+            displayName,
+            role: matchedInvite.role,
+            status: 'active',
+            permissions: matchedInvite.permissions,
+            inviteId: matchedInvite.id,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+          if (authSeqRef.current === seq) {
+            setProfile(staffProfile);
+          }
+        } else {
+          const pendingProfile: UserProfile = {
+            id: user.uid,
+            uid: user.uid,
+            email: user.email || '',
+            displayName,
+            role: 'pending',
+            status: 'pending',
+            permissions: DEFAULT_EMPLOYEE_PERMISSIONS,
+            createdAt: null,
+            updatedAt: null,
+          };
+          await setDoc(userRef, {
+            uid: user.uid,
+            email: user.email || '',
+            displayName,
+            role: 'pending',
+            status: 'pending',
+            permissions: DEFAULT_EMPLOYEE_PERMISSIONS,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+          if (authSeqRef.current === seq) {
+            setProfile(pendingProfile);
+          }
+        }
+      } else {
+        const existingData = userSnap.data() as Omit<UserProfile, 'id'>;
+        if (authSeqRef.current === seq) {
+          setProfile({ id: userSnap.id, ...existingData });
+        }
+
+        if (isBootstrap) {
+          const adminMarkerSnap = await getDoc(doc(db, 'admins', user.uid));
+          if (!adminMarkerSnap.exists()) {
             await setDoc(doc(db, 'admins', user.uid), {
               uid: user.uid,
               email: user.email || BOOTSTRAP_ADMIN_EMAIL,
               createdAt: serverTimestamp(),
             });
-          } else if (matchedInvite) {
-            resolvedRole = matchedInvite.role;
-            resolvedStatus = 'active';
-            await setDoc(userRef, {
-              uid: user.uid,
-              email: user.email || '',
-              displayName,
-              role: matchedInvite.role,
-              status: 'active',
-              permissions: matchedInvite.permissions,
-              inviteId: matchedInvite.id,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            });
-          } else {
-            await setDoc(userRef, {
-              uid: user.uid,
-              email: user.email || '',
-              displayName,
-              role: 'pending',
-              status: 'pending',
-              permissions: DEFAULT_EMPLOYEE_PERMISSIONS,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            });
-          }
-        } else {
-          const existingData = userSnap.data() as Omit<UserProfile, 'id'>;
-          resolvedRole = existingData.role;
-          resolvedStatus = existingData.status;
-          resolvedName = existingData.displayName || resolvedName;
-
-          if (isBootstrap) {
-            resolvedRole = 'admin';
-            resolvedStatus = 'active';
-            const adminMarkerSnap = await getDoc(doc(db, 'admins', user.uid));
-            if (!adminMarkerSnap.exists()) {
-              await setDoc(doc(db, 'admins', user.uid), {
-                uid: user.uid,
-                email: user.email || BOOTSTRAP_ADMIN_EMAIL,
-                createdAt: serverTimestamp(),
-              });
-            }
           }
         }
+      }
 
-        // Ensure default store settings and counters exist when bootstrap admin signs in
-        if (isBootstrap) {
+      // Ensure default store settings and counters exist when bootstrap admin signs in
+      if (isBootstrap) {
+        try {
           const settingsRef = doc(db, 'settings', 'store');
           const settingsSnap = await getDoc(settingsRef);
           if (!settingsSnap.exists()) {
@@ -298,93 +443,58 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
               updatedAt: serverTimestamp(),
             });
           }
+        } catch (seedErr) {
+          console.warn('[AlHussamAuth] Default settings/counters seed notice:', seedErr);
         }
+      }
 
-        const currentDev = getLocalDeviceIdentity();
-        setDeviceIdentity(currentDev);
-
-        const activeOnLogin =
-          isBootstrap ||
-          (resolvedStatus === 'active' &&
-            (resolvedRole === 'admin' || resolvedRole === 'employee'));
-
-        if (activeOnLogin) {
-          const roleForDev: 'admin' | 'employee' =
-            isBootstrap || resolvedRole === 'admin' ? 'admin' : 'employee';
-          registeredSessionKeyRef.current = `${user.uid}:${roleForDev}`;
-          const reg = await registerOrHeartbeatDevice({
-            deviceId: currentDev.deviceId,
-            deviceName: currentDev.deviceName,
-            deviceType: currentDev.deviceType,
-            platform: currentDev.platform,
-            userId: user.uid,
-            userName: resolvedName,
-            userEmail: user.email || 'staff@local',
-            userRole: roleForDev,
-          });
-          if (reg) {
-            setDeviceRecord(reg);
-            if (reg.deviceName && reg.deviceName !== currentDev.deviceName) {
-              const syncedName = saveDeviceName(reg.deviceName);
-              setDeviceIdentity((prev) => ({ ...prev, deviceName: syncedName }));
-            }
-          }
-        }
-
-        // Listen to current device status in real time (so admin remote block applies immediately)
-        unsubDevice = onSnapshot(
-          doc(db, 'devices', currentDev.deviceId),
-          (devSnap) => {
-            if (devSnap.exists()) {
-              const d = {
-                id: devSnap.id,
-                ...(devSnap.data() as Omit<DeviceRecord, 'id'>),
-              };
-              setDeviceRecord(d);
-              if (d.deviceName) {
-                const synced = saveDeviceName(d.deviceName);
-                setDeviceIdentity((prev) =>
-                  prev.deviceName === synced ? prev : { ...prev, deviceName: synced }
-                );
-              }
-            } else {
-              setDeviceRecord(null);
-            }
-          },
-          () => {
-            // Ignore device listener transient errors when pending or offline
-          }
-        );
-
-        // Listen to user's own profile document in real time
-        unsubProfile = onSnapshot(
-          userRef,
-          (snap) => {
-            if (snap.exists()) {
-              const data = snap.data() as Omit<UserProfile, 'id'>;
-              setProfile({ id: snap.id, ...data });
-            } else {
-              setProfile(null);
-            }
-            setLoading(false);
-          },
-          (err) => {
-            handleFirestoreError(err, OperationType.GET, `users/${user.uid}`);
-          }
-        );
-      } catch (err) {
-        console.error('Auth bootstrap error:', err);
-        setAuthError('حدث خطأ أثناء تهيئة الحساب. يرجى المحاولة مرة أخرى.');
+      if (authSeqRef.current === seq) {
         setLoading(false);
       }
+    } catch (err) {
+      if (authSeqRef.current !== seq) return;
+      console.error('[AlHussamAuth] Auth bootstrap error:', err);
+      if (!isBootstrap) {
+        setAuthError(
+          'تم تسجيل الدخول بحساب Google، لكن تعذر الاتصال بقاعدة البيانات لإتمام التحقق. تأكد من الاتصال بالإنترنت ثم اضغط إعادة المحاولة.'
+        );
+      }
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const unsubAuth = onAuthStateChanged(auth, (user) => {
+      console.info(
+        '[AlHussamAuth] onAuthStateChanged:',
+        user ? `${user.email} (uid=${user.uid}, verified=${user.emailVerified})` : 'signed-out'
+      );
+      void syncUserSession(user);
     });
 
     return () => {
+      authSeqRef.current++;
       unsubAuth();
-      if (unsubProfile) unsubProfile();
-      if (unsubDevice) unsubDevice();
+      if (unsubProfileRef.current) {
+        unsubProfileRef.current();
+        unsubProfileRef.current = null;
+      }
+      if (unsubDeviceRef.current) {
+        unsubDeviceRef.current();
+        unsubDeviceRef.current = null;
+      }
     };
-  }, []);
+  }, [syncUserSession]);
+
+  const retryProfileSync = useCallback(async () => {
+    const current = auth.currentUser;
+    if (!current) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    await syncUserSession(current);
+  }, [syncUserSession]);
 
   const isAdmin =
     Boolean(profile && profile.role === 'admin' && profile.status === 'active') ||
@@ -401,7 +511,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         (profile.role === 'admin' || profile.role === 'employee')
     );
 
-  // If a pending employee gets approved while waiting on LoginView, register their device automatically
+  // Register/heartbeat device in the background once the user is authorized
   useEffect(() => {
     if (!firebaseUser || !isActiveStaff) return;
     const roleForDev: 'admin' | 'employee' = isAdmin ? 'admin' : 'employee';
@@ -423,8 +533,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       .then((reg) => {
         if (reg) setDeviceRecord(reg);
       })
-      .catch(() => {
-        // Handled on next reconnect
+      .catch((err) => {
+        console.warn('[AlHussamAuth] Background device registration notice:', err);
       });
   }, [firebaseUser, isActiveStaff, isAdmin, profile?.displayName]);
 
@@ -471,16 +581,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   );
 
   const signInWithGoogle = async () => {
+    if (signingIn) return;
     setAuthError(null);
+    setSigningIn(true);
+
     if (Capacitor.isNativePlatform()) {
       try {
+        console.info('[AlHussamAuth] Initializing native SocialLogin...');
         await ensureNativeGoogleInitialized();
+        console.info('[AlHussamAuth] Opening native Google account picker...');
         const res = await SocialLogin.login({
           provider: 'google',
           options: {
             style: 'standard',
           },
         });
+        console.info(
+          '[AlHussamAuth] SocialLogin returned:',
+          res?.result?.responseType,
+          'hasIdToken=',
+          Boolean(res?.result && 'idToken' in res.result && res.result.idToken)
+        );
         if (res.result.responseType !== 'online' || !res.result.idToken) {
           setAuthError('لم يتم استلام رمز التحقق (ID Token) من حساب Google. يرجى المحاولة مرة أخرى.');
           return;
@@ -489,11 +610,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           res.result.idToken,
           res.result.accessToken?.token ?? undefined
         );
-        await signInWithCredential(auth, credential);
+        const userCred = await signInWithCredential(auth, credential);
+        console.info(
+          '[AlHussamAuth] Firebase signInWithCredential succeeded:',
+          userCred.user.email,
+          'uid=',
+          userCred.user.uid
+        );
+        setFirebaseUser(userCred.user);
       } catch (err) {
         const code = (err as { code?: string })?.code || '';
         const msg = err instanceof Error ? err.message : String(err);
         const lower = `${code} ${msg}`.toLowerCase();
+        console.error('[AlHussamAuth] Native Google sign-in error:', code, msg, err);
 
         if (
           code === 'USER_CANCELLED' ||
@@ -520,7 +649,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           );
           return;
         }
-        if (lower.includes('network')) {
+        if (code === 'auth/invalid-credential' || lower.includes('invalid-credential')) {
+          setAuthError(
+            'تم رفض رمز Google من Firebase Auth (invalid-credential). تأكد من تطابق Web Client ID في الإعدادات ومشروع Firebase.'
+          );
+          return;
+        }
+        if (code === 'auth/network-request-failed' || lower.includes('network')) {
           setAuthError('تعذر الاتصال بالإنترنت. يرجى التحقق من الشبكة والمحاولة مرة أخرى.');
           return;
         }
@@ -528,7 +663,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           setAuthError('معرّف Web Client ID غير مضبوط في إعدادات Firebase.');
           return;
         }
-        setAuthError('تعذر إتمام تسجيل الدخول عبر Google على الهاتف. يرجى المحاولة مرة أخرى.');
+        setAuthError(`تعذر إتمام تسجيل الدخول عبر Google على الهاتف: ${msg}`);
+      } finally {
+        setSigningIn(false);
       }
       return;
     }
@@ -557,6 +694,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       if (!msg.includes('popup-closed-by-user')) {
         setAuthError('تعذر تسجيل الدخول عبر Google. يرجى التحقق من السماح بالنوافذ المنبثقة.');
       }
+    } finally {
+      setSigningIn(false);
     }
   };
 
@@ -581,6 +720,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         firebaseUser,
         profile,
         loading,
+        signingIn,
         authError,
         isAdmin,
         isActiveStaff,
@@ -589,6 +729,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         isDeviceBlocked,
         actorInfo,
         signInWithGoogle,
+        retryProfileSync,
         logout,
         hasPermission,
         updateCurrentDeviceName,

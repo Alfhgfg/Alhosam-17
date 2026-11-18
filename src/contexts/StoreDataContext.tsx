@@ -186,6 +186,14 @@ export const StoreDataProvider: React.FC<{ children: React.ReactNode }> = ({
     });
   };
 
+  const logSnapshotError = (err: unknown, operationType: OperationType, path: string) => {
+    try {
+      handleFirestoreError(err, operationType, path);
+    } catch {
+      // Diagnostic logging only; avoid crashing async onSnapshot listeners
+    }
+  };
+
   useEffect(() => {
     if (!firebaseUser || !isActiveStaff || isDeviceBlocked) {
       setProducts([]);
@@ -224,7 +232,7 @@ export const StoreDataProvider: React.FC<{ children: React.ReactNode }> = ({
           }
           markPending('settings', snap.metadata.hasPendingWrites);
         },
-        (err) => handleFirestoreError(err, OperationType.GET, 'settings/store')
+        (err) => logSnapshotError(err, OperationType.GET, 'settings/store')
       )
     );
 
@@ -238,7 +246,7 @@ export const StoreDataProvider: React.FC<{ children: React.ReactNode }> = ({
           }
           markPending('counters', snap.metadata.hasPendingWrites);
         },
-        (err) => handleFirestoreError(err, OperationType.GET, 'counters/main')
+        (err) => logSnapshotError(err, OperationType.GET, 'counters/main')
       )
     );
 
@@ -256,7 +264,10 @@ export const StoreDataProvider: React.FC<{ children: React.ReactNode }> = ({
           markPending('products', snap.metadata.hasPendingWrites);
           setDataLoading(false);
         },
-        (err) => handleFirestoreError(err, OperationType.LIST, 'products')
+        (err) => {
+          logSnapshotError(err, OperationType.LIST, 'products');
+          setDataLoading(false);
+        }
       )
     );
 
@@ -273,7 +284,7 @@ export const StoreDataProvider: React.FC<{ children: React.ReactNode }> = ({
           );
           markPending('customers', snap.metadata.hasPendingWrites);
         },
-        (err) => handleFirestoreError(err, OperationType.LIST, 'customers')
+        (err) => logSnapshotError(err, OperationType.LIST, 'customers')
       )
     );
 
@@ -290,7 +301,7 @@ export const StoreDataProvider: React.FC<{ children: React.ReactNode }> = ({
           );
           markPending('suppliers', snap.metadata.hasPendingWrites);
         },
-        (err) => handleFirestoreError(err, OperationType.LIST, 'suppliers')
+        (err) => logSnapshotError(err, OperationType.LIST, 'suppliers')
       )
     );
 
@@ -340,7 +351,7 @@ export const StoreDataProvider: React.FC<{ children: React.ReactNode }> = ({
           setSales(rows);
           markPending('sales', snap.metadata.hasPendingWrites);
         },
-        (err) => handleFirestoreError(err, OperationType.LIST, 'sales')
+        (err) => logSnapshotError(err, OperationType.LIST, 'sales')
       )
     );
 
@@ -372,7 +383,7 @@ export const StoreDataProvider: React.FC<{ children: React.ReactNode }> = ({
           setReturns(rows);
           markPending('returns', snap.metadata.hasPendingWrites);
         },
-        (err) => handleFirestoreError(err, OperationType.LIST, 'returns')
+        (err) => logSnapshotError(err, OperationType.LIST, 'returns')
       )
     );
 
@@ -389,7 +400,7 @@ export const StoreDataProvider: React.FC<{ children: React.ReactNode }> = ({
           );
           markPending('stock_movements', snap.metadata.hasPendingWrites);
         },
-        (err) => handleFirestoreError(err, OperationType.LIST, 'stock_movements')
+        (err) => logSnapshotError(err, OperationType.LIST, 'stock_movements')
       )
     );
 
@@ -406,7 +417,7 @@ export const StoreDataProvider: React.FC<{ children: React.ReactNode }> = ({
           );
           markPending('vouchers', snap.metadata.hasPendingWrites);
         },
-        (err) => handleFirestoreError(err, OperationType.LIST, 'vouchers')
+        (err) => logSnapshotError(err, OperationType.LIST, 'vouchers')
       )
     );
 
@@ -424,7 +435,7 @@ export const StoreDataProvider: React.FC<{ children: React.ReactNode }> = ({
             );
             markPending('purchases', snap.metadata.hasPendingWrites);
           },
-          (err) => handleFirestoreError(err, OperationType.LIST, 'purchases')
+          (err) => logSnapshotError(err, OperationType.LIST, 'purchases')
         )
       );
     }
@@ -443,7 +454,7 @@ export const StoreDataProvider: React.FC<{ children: React.ReactNode }> = ({
             );
             markPending('expenses', snap.metadata.hasPendingWrites);
           },
-          (err) => handleFirestoreError(err, OperationType.LIST, 'expenses')
+          (err) => logSnapshotError(err, OperationType.LIST, 'expenses')
         )
       );
     }
@@ -462,7 +473,7 @@ export const StoreDataProvider: React.FC<{ children: React.ReactNode }> = ({
             );
             markPending('cash_transactions', snap.metadata.hasPendingWrites);
           },
-          (err) => handleFirestoreError(err, OperationType.LIST, 'cash_transactions')
+          (err) => logSnapshotError(err, OperationType.LIST, 'cash_transactions')
         )
       );
     }
@@ -480,7 +491,7 @@ export const StoreDataProvider: React.FC<{ children: React.ReactNode }> = ({
               }))
             );
           },
-          (err) => handleFirestoreError(err, OperationType.LIST, 'audit_logs')
+          (err) => logSnapshotError(err, OperationType.LIST, 'audit_logs')
         )
       );
 
@@ -495,7 +506,7 @@ export const StoreDataProvider: React.FC<{ children: React.ReactNode }> = ({
               }))
             );
           },
-          (err) => handleFirestoreError(err, OperationType.LIST, 'users')
+          (err) => logSnapshotError(err, OperationType.LIST, 'users')
         )
       );
 
@@ -510,7 +521,7 @@ export const StoreDataProvider: React.FC<{ children: React.ReactNode }> = ({
               }))
             );
           },
-          (err) => handleFirestoreError(err, OperationType.LIST, 'staff_invites')
+          (err) => logSnapshotError(err, OperationType.LIST, 'staff_invites')
         )
       );
 
@@ -525,7 +536,7 @@ export const StoreDataProvider: React.FC<{ children: React.ReactNode }> = ({
               }))
             );
           },
-          (err) => handleFirestoreError(err, OperationType.LIST, 'devices')
+          (err) => logSnapshotError(err, OperationType.LIST, 'devices')
         )
       );
     }

@@ -29,6 +29,8 @@ import ee.forgr.capacitor.social.login.SocialLoginPlugin;
 
 public class MainActivity extends BridgeActivity implements ModifiedMainActivityForSocialLoginPlugin {
 
+    private boolean webViewBridgeAttached = false;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -78,7 +80,10 @@ public class MainActivity extends BridgeActivity implements ModifiedMainActivity
         cookieManager.setAcceptCookie(true);
         cookieManager.setAcceptThirdPartyCookies(webView, true);
 
-        webView.addJavascriptInterface(new AndroidFileBridge(), "AndroidFileBridge");
+        if (!webViewBridgeAttached) {
+            webView.addJavascriptInterface(new AndroidFileBridge(), "AndroidFileBridge");
+            webViewBridgeAttached = true;
+        }
     }
 
     private class AndroidFileBridge {

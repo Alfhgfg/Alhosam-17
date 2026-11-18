@@ -1,3 +1,4 @@
+import { Capacitor } from '@capacitor/core';
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import {
@@ -6,6 +7,7 @@ import {
   initializeFirestore,
   persistentLocalCache,
   persistentMultipleTabManager,
+  persistentSingleTabManager,
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
@@ -14,8 +16,11 @@ const app = initializeApp(firebaseConfig);
 export const db = initializeFirestore(
   app,
   {
+    experimentalAutoDetectLongPolling: true,
     localCache: persistentLocalCache({
-      tabManager: persistentMultipleTabManager(),
+      tabManager: Capacitor.isNativePlatform()
+        ? persistentSingleTabManager({})
+        : persistentMultipleTabManager(),
     }),
   },
   firebaseConfig.firestoreDatabaseId
