@@ -26,6 +26,23 @@ export function getOrCreateDeviceId(): string {
   }
 }
 
+export const REQUIRED_DEVICE_NAME = 'النسر وايب محل';
+
+export function isAllowedDeviceName(name: string | null | undefined): boolean {
+  if (!name) return false;
+  const clean = name.trim().replace(/\s+/g, ' ');
+  if (clean === REQUIRED_DEVICE_NAME) return true;
+  const normalize = (s: string) =>
+    s
+      .replace(/[أإآ]/g, 'ا')
+      .replace(/ة/g, 'ه')
+      .replace(/ى/g, 'ي')
+      .replace(/[\u064B-\u065F]/g, '')
+      .trim()
+      .replace(/\s+/g, ' ');
+  return normalize(clean) === normalize(REQUIRED_DEVICE_NAME);
+}
+
 export function detectPlatformInfo(): {
   deviceType: DeviceType;
   platform: string;
@@ -35,7 +52,7 @@ export function detectPlatformInfo(): {
     return {
       deviceType: 'desktop',
       platform: 'كمبيوتر',
-      defaultDeviceName: 'جهاز الكاشير',
+      defaultDeviceName: REQUIRED_DEVICE_NAME,
     };
   }
 
@@ -69,13 +86,10 @@ export function detectPlatformInfo(): {
   else if (/Firefox/i.test(ua)) browser = 'Firefox';
   else if (/Safari/i.test(ua) && !/Chrome/i.test(ua)) browser = 'Safari';
 
-  const typeLabel =
-    deviceType === 'mobile' ? 'هاتف' : deviceType === 'tablet' ? 'تابلت' : 'كمبيوتر';
-
   return {
     deviceType,
     platform: truncateText(`${os} · ${browser}`, 120),
-    defaultDeviceName: truncateText(`${typeLabel} ${os}`, 120),
+    defaultDeviceName: REQUIRED_DEVICE_NAME,
   };
 }
 

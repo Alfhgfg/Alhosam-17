@@ -1,18 +1,24 @@
 import React, { useState } from 'react';
 import {
   Ban,
+  Check,
+  CheckCircle2,
   Clock,
   Laptop,
   LogOut,
   Pencil,
   ShieldAlert,
+  ShieldCheck,
   Smartphone,
   Store,
   Tablet,
-  Check,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { deviceTypeLabel } from '../utils/device';
+import {
+  deviceTypeLabel,
+  isAllowedDeviceName,
+  REQUIRED_DEVICE_NAME,
+} from '../utils/device';
 
 export const LoginView: React.FC = () => {
   const {
@@ -33,6 +39,11 @@ export const LoginView: React.FC = () => {
   const [editingDevice, setEditingDevice] = useState(false);
   const [deviceDraft, setDeviceDraft] = useState(deviceIdentity.deviceName);
   const [savingDevice, setSavingDevice] = useState(false);
+  const [localAuthNotice, setLocalAuthNotice] = useState<string | null>(null);
+
+  const isCurrentNameAllowed = isAllowedDeviceName(
+    deviceRecord?.deviceName || deviceIdentity.deviceName
+  );
 
   const DeviceIcon =
     deviceIdentity.deviceType === 'mobile'
@@ -45,6 +56,7 @@ export const LoginView: React.FC = () => {
     e.preventDefault();
     if (!deviceDraft.trim()) return;
     setSavingDevice(true);
+    setLocalAuthNotice(null);
     try {
       await updateCurrentDeviceName(deviceDraft);
       setEditingDevice(false);
@@ -91,6 +103,64 @@ export const LoginView: React.FC = () => {
             <LogOut className="w-4 h-4" />
             <span>تسجيل الخروج</span>
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (firebaseUser && !isCurrentNameAllowed) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+        <div className="bg-white border-2 border-amber-300 rounded-2xl p-8 max-w-md w-full space-y-5 text-center shadow-xs">
+          <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200 text-amber-700 flex items-center justify-center mx-auto">
+            <ShieldAlert className="w-7 h-7" />
+          </div>
+          <div className="space-y-2">
+            <h1 className="text-xl font-bold text-slate-900">الجهاز غير مصرح له بالدخول</h1>
+            <p className="text-sm text-slate-600 leading-relaxed">
+              فقط يُسمح بتسجيل الدخول لأي جهاز يقوم بتسجيل اسم الجهاز بهذا الاسم:
+              <span className="block mt-2 font-bold text-base text-emerald-800 bg-emerald-50 border border-emerald-300 py-2 px-3 rounded-xl">
+                «{REQUIRED_DEVICE_NAME}»
+              </span>
+            </p>
+            <div className="text-xs bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-slate-700 mt-2">
+              اسم هذا الجهاز الحالي:{' '}
+              <span className="font-semibold text-red-600">
+                {deviceRecord?.deviceName || deviceIdentity.deviceName}
+              </span>
+            </div>
+          </div>
+
+          <div className="space-y-2.5 pt-1">
+            <button
+              type="button"
+              disabled={savingDevice}
+              onClick={async () => {
+                setSavingDevice(true);
+                try {
+                  await updateCurrentDeviceName(REQUIRED_DEVICE_NAME);
+                } finally {
+                  setSavingDevice(false);
+                }
+              }}
+              className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-60 text-white text-sm font-semibold rounded-xl transition-colors cursor-pointer shadow-xs"
+            >
+              <Check className="w-4 h-4" />
+              <span>
+                {savingDevice
+                  ? 'جاري اعتماد الاسم...'
+                  : `تسجيل الجهاز باسم «${REQUIRED_DEVICE_NAME}» وتفعيل الدخول`}
+              </span>
+            </button>
+
+            <button
+              onClick={logout}
+              className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-900 text-white text-sm font-medium rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>تسجيل الخروج</span>
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -254,44 +324,124 @@ export const LoginView: React.FC = () => {
         </div>
 
         {/* Local Device Identity Box */}
-        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
+        <div
+          className={`rounded-xl p-4 space-y-3 border transition-colors ${
+            isCurrentNameAllowed
+              ? 'bg-emerald-50/70 border-emerald-300'
+              : 'bg-amber-50/80 border-2 border-amber-300'
+          }`}
+        >
           <div className="flex items-center justify-between text-xs">
-            <div className="flex items-center gap-2 text-slate-700 font-semibold">
-              <DeviceIcon className="w-4 h-4 text-emerald-700" />
-              <span>اسم هذا الجهاز: {deviceIdentity.deviceName}</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                setDeviceDraft(deviceIdentity.deviceName);
-                setEditingDevice((v) => !v);
-              }}
-              className="text-emerald-700 font-medium hover:underline cursor-pointer"
-            >
-              {editingDevice ? 'إلغاء' : 'تغيير الاسم'}
-            </button>
-          </div>
-          {editingDevice && (
-            <form onSubmit={handleSaveDeviceName} className="flex gap-2 pt-1">
-              <input
-                type="text"
-                value={deviceDraft}
-                onChange={(e) => setDeviceDraft(e.target.value)}
-                placeholder="مثال: كمبيوتر الكاشير الرئيسي أو هاتف أحمد"
-                className="flex-1 px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
+            <div className="flex items-center gap-2 font-semibold">
+              <DeviceIcon
+                className={`w-4 h-4 ${
+                  isCurrentNameAllowed ? 'text-emerald-700' : 'text-amber-700'
+                }`}
               />
-              <button
-                type="submit"
-                disabled={savingDevice}
-                className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-700 text-white text-xs font-semibold rounded-lg cursor-pointer"
+              <span
+                className={
+                  isCurrentNameAllowed
+                    ? 'text-emerald-950 font-bold'
+                    : 'text-slate-800 font-bold'
+                }
               >
-                <Check className="w-3.5 h-3.5" />
-                <span>حفظ</span>
+                اسم هذا الجهاز: {deviceIdentity.deviceName}
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              {isCurrentNameAllowed ? (
+                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-800 bg-emerald-100/90 border border-emerald-300 px-2.5 py-0.5 rounded-full">
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  <span>مصرح بالدخول ✓</span>
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-full">
+                  <ShieldAlert className="w-3.5 h-3.5" />
+                  <span>مطلوب اعتماد الاسم</span>
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setDeviceDraft(deviceIdentity.deviceName);
+                  setEditingDevice((v) => !v);
+                }}
+                className="text-emerald-700 font-semibold hover:underline cursor-pointer mr-1"
+              >
+                {editingDevice ? 'إلغاء' : 'تعديل'}
+              </button>
+            </div>
+          </div>
+
+          {!isCurrentNameAllowed && (
+            <div className="p-3 bg-white/95 border border-amber-200 rounded-xl text-xs space-y-2.5 shadow-2xs">
+              <div className="flex items-start gap-2 text-amber-900 leading-relaxed">
+                <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <strong>شرط الأمان للدخول:</strong> فقط يسمح تسجيل الدخول لأي جهاز يقوم بتسجيل اسم الجهاز بهذا الاسم{' '}
+                  <span className="text-emerald-700 font-bold underline">«{REQUIRED_DEVICE_NAME}»</span>.
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={savingDevice}
+                onClick={async () => {
+                  setSavingDevice(true);
+                  setLocalAuthNotice(null);
+                  try {
+                    setDeviceDraft(REQUIRED_DEVICE_NAME);
+                    await updateCurrentDeviceName(REQUIRED_DEVICE_NAME);
+                    setEditingDevice(false);
+                  } finally {
+                    setSavingDevice(false);
+                  }
+                }}
+                className="w-full inline-flex items-center justify-center gap-2 px-3.5 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer shadow-xs"
+              >
+                <Check className="w-4 h-4" />
+                <span>
+                  {savingDevice
+                    ? 'جاري الحفظ...'
+                    : `تسجيل الجهاز باسم «${REQUIRED_DEVICE_NAME}» بنقرة واحدة`}
+                </span>
+              </button>
+            </div>
+          )}
+
+          {editingDevice && (
+            <form onSubmit={handleSaveDeviceName} className="space-y-2 pt-1">
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={deviceDraft}
+                  onChange={(e) => setDeviceDraft(e.target.value)}
+                  placeholder={`اكتب: ${REQUIRED_DEVICE_NAME}`}
+                  className="flex-1 px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-emerald-600"
+                />
+                <button
+                  type="submit"
+                  disabled={savingDevice}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-700 text-white text-xs font-semibold rounded-lg cursor-pointer"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  <span>حفظ</span>
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDeviceDraft(REQUIRED_DEVICE_NAME)}
+                className="text-[11px] text-emerald-700 font-semibold hover:underline inline-flex items-center gap-1 cursor-pointer"
+              >
+                <span>تعيين القيمة تلقائياً إلى «{REQUIRED_DEVICE_NAME}»</span>
               </button>
             </form>
           )}
+
           <div className="text-[11px] text-slate-500">
-            {deviceTypeLabel(deviceIdentity.deviceType)} · {deviceIdentity.platform} · سيُسجل هذا الاسم في كل عملية بيع أو حركة من هذا الجهاز
+            {deviceTypeLabel(deviceIdentity.deviceType)} · {deviceIdentity.platform} ·{' '}
+            {isCurrentNameAllowed
+              ? 'الجهاز معتمد ومسموح له بإجراء العمليات'
+              : `يجب مطابقة الاسم «${REQUIRED_DEVICE_NAME}» لتسجيل الدخول`}
           </div>
         </div>
 
@@ -305,6 +455,13 @@ export const LoginView: React.FC = () => {
             </p>
           </div>
 
+          {localAuthNotice && (
+            <div className="p-3.5 rounded-lg bg-amber-50 border border-amber-300 text-amber-900 text-xs leading-relaxed flex items-start gap-2">
+              <ShieldAlert className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+              <span>{localAuthNotice}</span>
+            </div>
+          )}
+
           {authError && (
             <div className="p-3.5 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
               {authError}
@@ -313,9 +470,22 @@ export const LoginView: React.FC = () => {
 
           <button
             type="button"
-            onClick={signInWithGoogle}
+            onClick={async () => {
+              if (!isAllowedDeviceName(deviceIdentity.deviceName)) {
+                setLocalAuthNotice(
+                  `غير مسموح بالدخول: فقط يسمح تسجيل الدخول لأي جهاز يقوم بتسجيل اسم الجهاز بهذا الاسم «${REQUIRED_DEVICE_NAME}». اضغط زر "تسجيل الجهاز باسم ${REQUIRED_DEVICE_NAME}" أعلاه للمتابعة.`
+                );
+                return;
+              }
+              setLocalAuthNotice(null);
+              await signInWithGoogle();
+            }}
             disabled={signingIn}
-            className="w-full flex items-center justify-center gap-3 px-5 py-3 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold text-sm rounded-xl transition-colors cursor-pointer"
+            className={`w-full flex items-center justify-center gap-3 px-5 py-3 ${
+              isCurrentNameAllowed
+                ? 'bg-emerald-700 hover:bg-emerald-800'
+                : 'bg-slate-700 hover:bg-slate-800'
+            } disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold text-sm rounded-xl transition-colors cursor-pointer shadow-xs`}
           >
             {signingIn ? (
               <>

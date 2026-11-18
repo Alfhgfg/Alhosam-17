@@ -578,13 +578,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     async (newName: string) => {
       const saved = saveDeviceName(newName);
       setDeviceIdentity((prev) => ({ ...prev, deviceName: saved }));
+      if (firebaseUser) {
+        try {
+          const devDocRef = doc(db, 'devices', deviceIdentity.deviceId);
+          const snap = await getDoc(devDocRef);
+          if (snap.exists()) {
+            await updateDoc(devDocRef, {
+              deviceName: saved,
+              updatedAt: serverTimestamp(),
+              lastActiveAt: serverTimestamp(),
+            });
+            setDeviceRecord((prev) => (prev ? { ...prev, deviceName: saved } : null));
+          }
+        } catch (e) {
+          console.warn('[AlHussamAuth] Direct device rename update notice:', e);
+        }
+      }
       if (actorInfo && isActiveStaff && deviceRecord) {
-        await renameDeviceRecord(actorInfo, deviceIdentity.deviceId, saved, {
-          isActiveStaff,
-        });
+        try {
+          await renameDeviceRecord(actorInfo, deviceIdentity.deviceId, saved, {
+            isActiveStaff,
+          });
+        } catch (e) {
+          console.warn('[AlHussamAuth] renameDeviceRecord notice:', e);
+        }
       }
     },
-    [actorInfo, isActiveStaff, deviceRecord, deviceIdentity.deviceId]
+    [actorInfo, isActiveStaff, deviceRecord, deviceIdentity.deviceId, firebaseUser]
   );
 
   const signInWithGoogle = async () => {

@@ -35,7 +35,11 @@ import {
   type UserPermissions,
   type UserProfile,
 } from '../types';
-import { deviceTypeLabel } from '../utils/device';
+import {
+  deviceTypeLabel,
+  isAllowedDeviceName,
+  REQUIRED_DEVICE_NAME,
+} from '../utils/device';
 import { saveTextFileCrossPlatform } from '../utils/exportExcel';
 import { formatDateTime } from '../utils/format';
 
@@ -603,11 +607,20 @@ export const StaffAuditView: React.FC = () => {
                           <div className="flex items-center gap-2">
                             <DevIcon className="w-4 h-4 text-slate-600 shrink-0" />
                             <div>
-                              <div className="font-bold text-slate-900 text-sm">
-                                {dev.deviceName}
+                              <div className="font-bold text-slate-900 text-sm flex items-center gap-1.5 flex-wrap">
+                                <span>{dev.deviceName}</span>
                                 {isSelf && (
-                                  <span className="mr-1.5 text-[11px] font-semibold text-emerald-700">
+                                  <span className="text-[11px] font-semibold text-emerald-700">
                                     (هذا الجهاز)
+                                  </span>
+                                )}
+                                {isAllowedDeviceName(dev.deviceName) ? (
+                                  <span className="text-[10px] font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">
+                                    اسم معتمد
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
+                                    اسم غير معتمد
                                   </span>
                                 )}
                               </div>
@@ -1005,9 +1018,18 @@ export const StaffAuditView: React.FC = () => {
                 type="text"
                 value={renameDevInput}
                 onChange={(e) => setRenameDevInput(e.target.value)}
-                placeholder="مثال: كاشير البوابة / هاتف أحمد"
+                placeholder={`اكتب: ${REQUIRED_DEVICE_NAME}`}
                 className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
               />
+              <div className="flex justify-end mt-1.5">
+                <button
+                  type="button"
+                  onClick={() => setRenameDevInput(REQUIRED_DEVICE_NAME)}
+                  className="text-[11px] text-emerald-700 font-semibold hover:underline cursor-pointer"
+                >
+                  تعيين الاسم المعتمد «{REQUIRED_DEVICE_NAME}»
+                </button>
+              </div>
             </div>
             <div className="flex justify-end gap-2">
               <button

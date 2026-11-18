@@ -40,7 +40,11 @@ import { ReturnsView } from './components/ReturnsView';
 import { StaffAuditView } from './components/StaffAuditView';
 import { SuppliersPurchasesView } from './components/SuppliersPurchasesView';
 import type { NavSection, PendingOperationType } from './types';
-import { deviceTypeLabel } from './utils/device';
+import {
+  deviceTypeLabel,
+  isAllowedDeviceName,
+  REQUIRED_DEVICE_NAME,
+} from './utils/device';
 import { formatDateTime } from './utils/format';
 
 interface NavItem {
@@ -102,6 +106,7 @@ const MainShell: React.FC = () => {
   const [renameModalOpen, setRenameModalOpen] = useState(false);
   const [deviceNameDraft, setDeviceNameDraft] = useState('');
   const [savingDeviceName, setSavingDeviceName] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
 
   const navItems: NavItem[] = useMemo(
     () => [
@@ -140,24 +145,16 @@ const MainShell: React.FC = () => {
     [isAdmin, hasPermission]
   );
 
-  console.info('[AuthDiag 10] LoginView render decision check:', {
-    loading,
-    hasUser: Boolean(firebaseUser),
-    userEmail: firebaseUser?.email,
-    isActiveStaff,
-    isAdmin,
-    isDeviceBlocked,
-    profileStatus: profile?.status,
-    profileRole: profile?.role,
-  });
+  const currentDeviceName = deviceRecord?.deviceName || deviceIdentity.deviceName;
+  const isDeviceNameAuthorized = isAllowedDeviceName(currentDeviceName);
 
-  if (loading || !firebaseUser || !isActiveStaff || isDeviceBlocked) {
-    console.warn('[AuthDiag 10b] Rendering LoginView because:', {
-      loading,
-      noUser: !firebaseUser,
-      notActiveStaff: !isActiveStaff,
-      deviceBlocked: isDeviceBlocked,
-    });
+  if (
+    loading ||
+    !firebaseUser ||
+    !isActiveStaff ||
+    isDeviceBlocked ||
+    !isDeviceNameAuthorized
+  ) {
     return <LoginView />;
   }
 
@@ -165,7 +162,6 @@ const MainShell: React.FC = () => {
   const currentNav =
     visibleNav.find((n) => n.id === activeSection) || visibleNav[0];
 
-  const currentDeviceName = deviceRecord?.deviceName || deviceIdentity.deviceName;
   const DeviceIcon =
     deviceIdentity.deviceType === 'mobile'
       ? Smartphone
@@ -182,15 +178,22 @@ const MainShell: React.FC = () => {
 
   const openRenameModal = () => {
     setDeviceNameDraft(currentDeviceName);
+    setRenameError(null);
     setRenameModalOpen(true);
   };
 
   const handleSaveDeviceName = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!deviceNameDraft.trim()) return;
+    const clean = deviceNameDraft.trim();
+    if (!clean) return;
+    if (!isAllowedDeviceName(clean)) {
+      setRenameError(`وفقاً للسياسة الأمنية، يجب أن يكون اسم الجهاز «${REQUIRED_DEVICE_NAME}» حصراً.`);
+      return;
+    }
+    setRenameError(null);
     setSavingDeviceName(true);
     try {
-      await updateCurrentDeviceName(deviceNameDraft);
+      await updateCurrentDeviceName(clean);
       setRenameModalOpen(false);
     } finally {
       setSavingDeviceName(false);
@@ -537,6 +540,11 @@ const MainShell: React.FC = () => {
                 <X className="w-4 h-4" />
               </button>
             </div>
+            {renameError && (
+              <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg leading-relaxed">
+                {renameError}
+              </div>
+            )}
             <div className="space-y-2">
               <label className="block text-xs font-semibold text-slate-700">
                 الاسم الظاهر للمسؤول وفي الفواتير *
@@ -545,12 +553,25 @@ const MainShell: React.FC = () => {
                 required
                 type="text"
                 value={deviceNameDraft}
-                onChange={(e) => setDeviceNameDraft(e.target.value)}
-                placeholder="مثال: كاشير 1 أو هاتف محمد"
+                onChange={(e) => {
+                  setDeviceNameDraft(e.target.value);
+                  if (renameError) setRenameError(null);
+                }}
+                placeholder={`اكتب: ${REQUIRED_DEVICE_NAME}`}
                 className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
               />
-              <div className="text-[11px] text-slate-500 font-mono-num">
-                {deviceTypeLabel(deviceIdentity.deviceType)} · {deviceIdentity.platform}
+              <div className="flex items-center justify-between text-[11px] text-slate-500">
+                <span>{deviceTypeLabel(deviceIdentity.deviceType)} · {deviceIdentity.platform}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeviceNameDraft(REQUIRED_DEVICE_NAME);
+                    if (renameError) setRenameError(null);
+                  }}
+                  className="text-emerald-700 font-semibold hover:underline cursor-pointer"
+                >
+                  تعيين «{REQUIRED_DEVICE_NAME}»
+                </button>
               </div>
             </div>
             <div className="flex justify-end gap-2 pt-2">
